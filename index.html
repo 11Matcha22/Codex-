@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Hook Swing Prototype</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hud">
+        <div id="stageInfo">Stage 1</div>
+        <div id="timer">0.000s</div>
+        <button id="menuBtn" type="button">Menu</button>
+      </header>
+
+      <main>
+        <section id="titleScreen" class="screen active">
+          <h1>Hook Swing</h1>
+          <p>タップ/ホールドでフック、離して解除</p>
+          <button id="startBtn" type="button">スタート</button>
+          <button id="selectBtn" type="button">ステージセレクト</button>
+          <div class="stats">
+            <div>到達: <span id="reachedCount">1</span> / 50</div>
+            <div>クリア: <span id="clearedCount">0</span> / 50</div>
+            <div>合計ベスト: <span id="totalBest">--</span></div>
+          </div>
+        </section>
+
+        <section id="selectScreen" class="screen">
+          <h2>ステージセレクト</h2>
+          <div id="stageGrid" class="stage-grid"></div>
+          <button id="backBtn" type="button">戻る</button>
+        </section>
+
+        <section id="gameScreen" class="screen">
+          <canvas id="gameCanvas" width="1280" height="720"></canvas>
+        </section>
+      </main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
