@@ -184,7 +184,7 @@ function clearStage() {
   setScreen("select");
 }
 
-function findClosestAnchor(maxDist = 180) {
+function findClosestAnchor(maxDist = Infinity) {
   const stage = state.stages[state.currentStageIndex];
   let best = null;
   let bestD = Infinity;
