@@ -1,0 +1,14 @@
+{
+  "features": {
+    "clearCinematic": true,
+    "clearEvaluation": true
+  },
+  "clear": {
+    "durationMs": 850,
+    "slowMotionScale": 0.25
+  },
+  "trampoline": {
+    "verticalScale": 0.5,
+    "horizontalScale": 0.5
+  }
+}
