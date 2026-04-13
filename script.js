@@ -77,6 +77,7 @@ function makeStages(count) {
       const y = i <= 10
         ? 170 + a * 36 + Math.sin((a + i) * 0.7) * 22
         : 210 + Math.sin((a + i) * 0.9) * (80 + (i % 6) * 5);
+
       anchors.push({ x, y });
     }
     const failZoneY = 690;
@@ -221,7 +222,6 @@ function step(dt) {
   const stage = state.stages[state.currentStageIndex];
   const p = state.player;
   state.lockedAnchor = findClosestAnchor();
-
   p.vy += 980 * dt;
 
   if (state.hookedAnchor) {
