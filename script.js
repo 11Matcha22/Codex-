@@ -77,12 +77,53 @@ function makeStages(count) {
       const y = i <= 10
         ? 170 + a * 36 + Math.sin((a + i) * 0.7) * 22
         : 210 + Math.sin((a + i) * 0.9) * (80 + (i % 6) * 5);
-
       anchors.push({ x, y });
     }
     const failZoneY = 690;
     const goalX = anchors[anchors.length - 1].x + 220;
-    const trampolines = i % 5 === 0 ? [{ x: anchors[1].x + 70, y: 620, w: 90, h: 14, boost: 420 }] : [];
+    const trampolines = [];
+    if (i <= 8) {
+      for (let x = 0; x <= goalX + 120; x += 110) {
+        trampolines.push({ x, y: 630, w: 120, h: 16, boost: 700, angle: 0, vxBoost: 80, moveAmp: 0, moveSpeed: 0, phase: 0 });
+      }
+    } else {
+      const countByLevel = Math.max(2, 6 - Math.floor(i / 10));
+      for (let t = 0; t < countByLevel; t += 1) {
+        trampolines.push({
+          x: 180 + t * (goalX / (countByLevel + 1)),
+          y: 610 - (t % 2) * 35,
+          w: 110,
+          h: 14,
+          boost: 620 + (i > 25 ? 40 : 0),
+          angle: i >= 30 && t % 2 === 0 ? (t % 4 === 0 ? 0.24 : -0.2) : 0,
+          vxBoost: 90 + i * 1.5,
+          moveAmp: i >= 24 && t === countByLevel - 1 ? 28 : 0,
+          moveSpeed: i >= 24 && t === countByLevel - 1 ? 1.8 : 0,
+          phase: t * 0.7,
+        });
+      }
+      if (i >= 35) {
+        const near = anchors[Math.min(2, anchors.length - 2)];
+        trampolines.push({
+          x: near.x - 50,
+          y: near.y + 120,
+          w: 90,
+          h: 14,
+          boost: 760,
+          angle: 0.1,
+          vxBoost: 160,
+          moveAmp: 0,
+          moveSpeed: 0,
+          phase: 0,
+        });
+      }
+    }
+    const walls = i >= 32
+      ? [
+          { x: goalX * 0.45, y: 280, w: 24, h: 260 },
+          { x: goalX * 0.68, y: 140, w: 24, h: 240 },
+        ]
+      : [];
     stages.push({
       id: i,
       width: goalX + 220,
@@ -91,6 +132,7 @@ function makeStages(count) {
       failMargin: 120,
       goalLineX: goalX,
       trampolines,
+      walls,
     });
   }
   return stages;
@@ -174,7 +216,6 @@ function failAndRetry() {
 
 function clearStage() {
   const stageId = state.currentStageIndex + 1;
-  state.running = false;
   state.progress.cleared[stageId] = true;
   const existing = state.progress.bestTimes[stageId];
   if (existing == null || state.elapsedSec < existing) {
@@ -187,7 +228,12 @@ function clearStage() {
   saveProgress();
   updateStatsUI();
   buildStageGrid();
-  setScreen("select");
+  if (stageId < STAGE_COUNT) {
+    startStage(stageId);
+  } else {
+    state.running = false;
+    setScreen("select");
+  }
 }
 
 function findClosestAnchor(maxDist = Infinity) {
@@ -218,10 +264,68 @@ function unhook() {
   state.hookedAnchor = null;
 }
 
+function resolveTrampolines(stage, p) {
+  const tSec = (performance.now() - state.stageStartMs) / 1000;
+  for (const t of stage.trampolines) {
+    const moveOffset = t.moveAmp ? Math.sin(tSec * t.moveSpeed + t.phase) * t.moveAmp : 0;
+    const cx = t.x + t.w / 2;
+    const cy = t.y + moveOffset + t.h / 2;
+    const angle = t.angle || 0;
+    const cos = Math.cos(-angle);
+    const sin = Math.sin(-angle);
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const lx = dx * cos - dy * sin;
+    const ly = dx * sin + dy * cos;
+
+    if (Math.abs(lx) <= t.w / 2 && Math.abs(ly) <= t.h / 2 + p.radius + 2 && p.vy > 0) {
+      const nx = -Math.sin(angle);
+      const ny = -Math.cos(angle);
+      const dot = p.vx * nx + p.vy * ny;
+      if (dot < 0) {
+        p.vx -= (1.5 * dot) * nx;
+        p.vy -= (1.5 * dot) * ny;
+      }
+      const tx = Math.cos(angle);
+      const ty = Math.sin(angle);
+      p.vx += tx * t.vxBoost;
+      p.vy += ty * t.vxBoost * 0.4;
+      p.vx += nx * t.boost * 0.15;
+      p.vy += ny * t.boost;
+      p.x += nx * 6;
+      p.y += ny * 6;
+    }
+  }
+}
+
+function resolveWalls(stage, p) {
+  for (const wall of stage.walls) {
+    const closestX = Math.max(wall.x, Math.min(p.x, wall.x + wall.w));
+    const closestY = Math.max(wall.y, Math.min(p.y, wall.y + wall.h));
+    const dx = p.x - closestX;
+    const dy = p.y - closestY;
+    const distSq = dx * dx + dy * dy;
+    if (distSq < p.radius * p.radius) {
+      const dist = Math.sqrt(distSq) || 0.001;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const push = p.radius - dist;
+      p.x += nx * push;
+      p.y += ny * push;
+      const vn = p.vx * nx + p.vy * ny;
+      if (vn < 0) {
+        p.vx -= vn * nx;
+        p.vy -= vn * ny;
+      }
+    }
+  }
+}
+
 function step(dt) {
   const stage = state.stages[state.currentStageIndex];
   const p = state.player;
   state.lockedAnchor = findClosestAnchor();
+
   p.vy += 980 * dt;
 
   if (state.hookedAnchor) {
@@ -247,12 +351,8 @@ function step(dt) {
   p.x += p.vx * dt;
   p.y += p.vy * dt;
 
-  for (const t of stage.trampolines) {
-    if (p.x > t.x && p.x < t.x + t.w && p.y + p.radius >= t.y && p.y + p.radius <= t.y + t.h + 14 && p.vy > 0) {
-      p.y = t.y - p.radius;
-      p.vy = -t.boost;
-    }
-  }
+  resolveTrampolines(stage, p);
+  resolveWalls(stage, p);
 
   if (p.y > stage.failZoneY + stage.failMargin) {
     failAndRetry();
@@ -297,13 +397,26 @@ function draw() {
   ctx.strokeStyle = "#68ff8f";
   ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.moveTo(stage.goalLineX, 80);
-  ctx.lineTo(stage.goalLineX, stage.failZoneY - 120);
+  ctx.moveTo(stage.goalLineX, 8);
+  ctx.lineTo(stage.goalLineX, canvas.height - 8);
   ctx.stroke();
 
   ctx.fillStyle = "#8bf5a4";
   for (const t of stage.trampolines) {
-    ctx.fillRect(t.x, t.y, t.w, t.h);
+    const tSec = (performance.now() - state.stageStartMs) / 1000;
+    const moveOffset = t.moveAmp ? Math.sin(tSec * t.moveSpeed + t.phase) * t.moveAmp : 0;
+    const cx = t.x + t.w / 2;
+    const cy = t.y + moveOffset + t.h / 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(t.angle || 0);
+    ctx.fillRect(-t.w / 2, -t.h / 2, t.w, t.h);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = "#7ca0ff";
+  for (const wall of stage.walls) {
+    ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
   }
 
   ctx.fillStyle = "rgba(255,80,80,0.22)";
@@ -391,16 +504,54 @@ function playFailBeep() {
   osc.stop(audioCtx.currentTime + 0.13);
 }
 
+function playHookSe() {
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(520, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.08);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.09);
+}
+
+function playUnhookSe(speed) {
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const clamped = Math.max(120, Math.min(1200, speed));
+  const freq = 280 + (clamped - 120) * 0.42;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.11);
+}
+
 function onPress(event) {
   event.preventDefault();
   if (!state.running) return;
   state.pointerDown = true;
+  const before = state.hookedAnchor;
   hook();
+  if (!before && state.hookedAnchor) {
+    playHookSe();
+  }
 }
 
 function onRelease(event) {
   event.preventDefault();
   state.pointerDown = false;
+  if (state.hookedAnchor && state.player) {
+    const speed = Math.hypot(state.player.vx, state.player.vy);
+    playUnhookSe(speed);
+  }
   unhook();
 }
 

@@ -95,6 +95,7 @@ button {
   background: #0b1324;
   touch-action: none;
 }
+
 #gameScreen {
   touch-action: none;
 }
