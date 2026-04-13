@@ -1,5 +1,20 @@
 const STAGE_COUNT = 50;
 const STORAGE_KEY = "hook_swing_progress_v1";
+// 調整用の設定ファイルが読み込めなかった時の安全な既定値
+const DEFAULT_CONFIG = {
+  features: {
+    clearCinematic: true,
+    clearEvaluation: true,
+  },
+  clear: {
+    durationMs: 850,
+    slowMotionScale: 0.25,
+  },
+  trampoline: {
+    verticalScale: 0.5,
+    horizontalScale: 0.5,
+  },
+};
 
 const screens = {
   title: document.getElementById("titleScreen"),
@@ -19,6 +34,7 @@ const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
 const state = {
+  // ゲーム進行・描画・演出で使う共有状態
   progress: loadProgress(),
   stages: makeStages(STAGE_COUNT),
   currentStageIndex: 0,
@@ -32,6 +48,9 @@ const state = {
   player: null,
   hookedAnchor: null,
   lockedAnchor: null,
+  tapCount: 0,
+  clearSequence: null,
+  config: structuredClone(DEFAULT_CONFIG),
 };
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -63,6 +82,34 @@ function loadProgress() {
 
 function saveProgress() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.progress));
+}
+
+function getConfig(path, fallback) {
+  const keys = path.split(".");
+  let current = state.config;
+  for (const key of keys) {
+    if (current && Object.prototype.hasOwnProperty.call(current, key)) {
+      current = current[key];
+    } else {
+      return fallback;
+    }
+  }
+  return current;
+}
+
+async function loadConfig() {
+  try {
+    const response = await fetch("./config/gameplay.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("config not found");
+    const loaded = await response.json();
+    state.config = {
+      features: { ...DEFAULT_CONFIG.features, ...(loaded.features || {}) },
+      clear: { ...DEFAULT_CONFIG.clear, ...(loaded.clear || {}) },
+      trampoline: { ...DEFAULT_CONFIG.trampoline, ...(loaded.trampoline || {}) },
+    };
+  } catch {
+    state.config = structuredClone(DEFAULT_CONFIG);
+  }
 }
 
 function makeStages(count) {
@@ -202,6 +249,8 @@ function startStage(index) {
   state.lastTs = 0;
   state.accumulator = 0;
   state.running = true;
+  state.clearSequence = null;
+  state.tapCount = 0;
   stageInfoEl.textContent = `Stage ${index + 1}`;
   timerEl.textContent = "0.000s";
   setScreen("game");
@@ -216,6 +265,17 @@ function failAndRetry() {
 
 function clearStage() {
   const stageId = state.currentStageIndex + 1;
+  const p = state.player;
+  const speed = Math.hypot(p.vx, p.vy);
+  const angleDeg = Math.atan2(p.vy, p.vx) * (180 / Math.PI);
+  const heightFromBottom = canvas.height - p.y;
+  const clearMetrics = {
+    timeSec: state.elapsedSec,
+    speed: Number(speed.toFixed(1)),
+    angleDeg: Number(angleDeg.toFixed(1)),
+    height: Number(heightFromBottom.toFixed(1)),
+    taps: state.tapCount,
+  };
   state.progress.cleared[stageId] = true;
   const existing = state.progress.bestTimes[stageId];
   if (existing == null || state.elapsedSec < existing) {
@@ -228,12 +288,13 @@ function clearStage() {
   saveProgress();
   updateStatsUI();
   buildStageGrid();
-  if (stageId < STAGE_COUNT) {
-    startStage(stageId);
-  } else {
-    state.running = false;
-    setScreen("select");
-  }
+  state.clearSequence = {
+    startedAt: performance.now(),
+    durationMs: getConfig("clear.durationMs", 850),
+    nextStageIndex: stageId < STAGE_COUNT ? stageId : null,
+    metrics: clearMetrics,
+    showEvaluation: Boolean(getConfig("features.clearEvaluation", true)),
+  };
 }
 
 function findClosestAnchor(maxDist = Infinity) {
@@ -265,6 +326,9 @@ function unhook() {
 }
 
 function resolveTrampolines(stage, p) {
+  // トランポリンの縦横勢いは外部JSONで調整できる
+  const vScale = getConfig("trampoline.verticalScale", 0.5);
+  const hScale = getConfig("trampoline.horizontalScale", 0.5);
   const tSec = (performance.now() - state.stageStartMs) / 1000;
   for (const t of stage.trampolines) {
     const moveOffset = t.moveAmp ? Math.sin(tSec * t.moveSpeed + t.phase) * t.moveAmp : 0;
@@ -288,10 +352,10 @@ function resolveTrampolines(stage, p) {
       }
       const tx = Math.cos(angle);
       const ty = Math.sin(angle);
-      p.vx += tx * t.vxBoost;
-      p.vy += ty * t.vxBoost * 0.4;
-      p.vx += nx * t.boost * 0.15;
-      p.vy += ny * t.boost;
+      p.vx += tx * t.vxBoost * hScale;
+      p.vy += ty * t.vxBoost * 0.4 * hScale;
+      p.vx += nx * t.boost * 0.15 * hScale;
+      p.vy += ny * t.boost * vScale;
       p.x += nx * 6;
       p.y += ny * 6;
     }
@@ -325,6 +389,29 @@ function step(dt) {
   const stage = state.stages[state.currentStageIndex];
   const p = state.player;
   state.lockedAnchor = findClosestAnchor();
+
+  // クリア演出中は短時間のスローモーションを優先し、判定を停止する
+  if (state.clearSequence && getConfig("features.clearCinematic", true)) {
+    const elapsed = performance.now() - state.clearSequence.startedAt;
+    const slow = getConfig("clear.slowMotionScale", 0.25);
+    p.vy += 980 * dt * slow * 0.15;
+    p.x += p.vx * dt * slow;
+    p.y += p.vy * dt * slow;
+    p.vx *= 0.992;
+    p.vy *= 0.992;
+    state.cameraX = Math.max(0, p.x - 220);
+    if (elapsed >= state.clearSequence.durationMs) {
+      const next = state.clearSequence.nextStageIndex;
+      state.clearSequence = null;
+      if (next != null) {
+        startStage(next);
+      } else {
+        state.running = false;
+        setScreen("select");
+      }
+    }
+    return;
+  }
 
   p.vy += 980 * dt;
 
@@ -442,6 +529,27 @@ function draw() {
   drawStickman(p.x, p.y, p.radius);
 
   ctx.restore();
+
+  if (state.clearSequence) {
+    const m = state.clearSequence.metrics;
+    ctx.fillStyle = "rgba(5,10,20,0.42)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f8ff9c";
+    ctx.font = "bold 70px sans-serif";
+    ctx.fillText("CLEAR!", canvas.width / 2, canvas.height * 0.38);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "24px sans-serif";
+    ctx.fillText(`TIME ${m.timeSec.toFixed(3)}s`, canvas.width / 2, canvas.height * 0.47);
+    if (state.clearSequence.showEvaluation) {
+      ctx.font = "19px sans-serif";
+      ctx.fillText(
+        `速度 ${m.speed} | 角度 ${m.angleDeg}° | 高さ ${m.height} | タップ ${m.taps}`,
+        canvas.width / 2,
+        canvas.height * 0.56
+      );
+    }
+  }
 }
 
 function drawStickman(x, y, r) {
@@ -537,7 +645,9 @@ function playUnhookSe(speed) {
 function onPress(event) {
   event.preventDefault();
   if (!state.running) return;
+  if (state.clearSequence) return;
   state.pointerDown = true;
+  state.tapCount += 1;
   const before = state.hookedAnchor;
   hook();
   if (!before && state.hookedAnchor) {
@@ -593,4 +703,4 @@ function boot() {
   setInterval(start, 200);
 }
 
-boot();
+loadConfig().finally(() => boot());
