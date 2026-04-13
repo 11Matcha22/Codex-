@@ -13,6 +13,7 @@ const reachedCountEl = document.getElementById("reachedCount");
 const clearedCountEl = document.getElementById("clearedCount");
 const totalBestEl = document.getElementById("totalBest");
 const stageGridEl = document.getElementById("stageGrid");
+const gameScreenEl = document.getElementById("gameScreen");
 
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
@@ -30,6 +31,7 @@ const state = {
   pointerDown: false,
   player: null,
   hookedAnchor: null,
+  lockedAnchor: null,
 };
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -72,7 +74,10 @@ function makeStages(count) {
     const waves = 3 + (i % 3);
     for (let a = 0; a < waves + 3; a += 1) {
       const x = baseX + a * spacing;
-      const y = 210 + Math.sin((a + i) * 0.9) * (80 + (i % 6) * 5);
+      const y = i <= 10
+        ? 170 + a * 36 + Math.sin((a + i) * 0.7) * 22
+        : 210 + Math.sin((a + i) * 0.9) * (80 + (i % 6) * 5);
+
       anchors.push({ x, y });
     }
     const failZoneY = 690;
@@ -139,6 +144,7 @@ function initPlayer() {
     ropeLength: 0,
   };
   state.hookedAnchor = null;
+  state.lockedAnchor = null;
 }
 
 function startStage(index) {
@@ -204,6 +210,7 @@ function hook() {
   const anchor = findClosestAnchor();
   if (!anchor) return;
   state.hookedAnchor = anchor;
+  state.lockedAnchor = anchor;
   state.player.ropeLength = Math.hypot(anchor.x - state.player.x, anchor.y - state.player.y);
 }
 
@@ -214,7 +221,7 @@ function unhook() {
 function step(dt) {
   const stage = state.stages[state.currentStageIndex];
   const p = state.player;
-
+  state.lockedAnchor = findClosestAnchor();
   p.vy += 980 * dt;
 
   if (state.hookedAnchor) {
@@ -311,6 +318,14 @@ function draw() {
     ctx.stroke();
   }
 
+  if (state.lockedAnchor && !state.hookedAnchor) {
+    ctx.strokeStyle = "#f9ff7f";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(state.lockedAnchor.x, state.lockedAnchor.y, 13, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   drawStickman(p.x, p.y, p.radius);
 
   ctx.restore();
@@ -390,9 +405,16 @@ function onRelease(event) {
 }
 
 function bindInput() {
-  canvas.addEventListener("pointerdown", onPress);
+  gameScreenEl.addEventListener("pointerdown", onPress);
   window.addEventListener("pointerup", onRelease);
   window.addEventListener("pointercancel", onRelease);
+  gameScreenEl.addEventListener("touchstart", (event) => {
+    if (screens.game.classList.contains("active")) {
+      event.preventDefault();
+    }
+  }, { passive: false });
+  gameScreenEl.addEventListener("dblclick", (event) => event.preventDefault());
+  document.addEventListener("gesturestart", (event) => event.preventDefault());
 }
 
 function boot() {
